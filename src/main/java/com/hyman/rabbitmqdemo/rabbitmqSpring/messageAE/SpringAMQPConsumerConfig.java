@@ -117,6 +117,29 @@ public class SpringAMQPConsumerConfig {
         Map<String,Object> argumentMap = new HashMap<>();
         messagelistener.setConsumerArguments(argumentMap);
 
+
+        /**
+         * RabbitMQ使用不当导致的队列堵塞问题及解决之道：
+         *
+         * 前提是要确定队列堵塞是由于消费者线程取走了消息，但是既没有ACK，也没有NACK，这样的消息个数到达Qos设置的值后，队列就
+         * 会堵塞，不再回调handleDelivery函数。
+         *
+         * 解决办法是在 finally语句中来执行这些操作，从队列中取出消息后，会有三种处理结果：
+         * 1、处理成功，这时应该用basicAck确认消息。（  channel.basicAck(tag)）
+         * 2、可重试的处理失败，这时应该用basicNack将消息重新入列。（channel.basicNack(tag, false, true)）
+         * 3、不可重试的处理失败，这时候应该使用basicNack将消息丢弃。（ channel.basicNack(tag, false, false)）
+         *
+         * 如果只是队列消费者比较少，每个监听器只有一个消费者，当队列消费的速度小于队列生产者插入队列中消息个数时就造成了队列消
+         * 息堆积。因为默认情况下，rabbitmq消费者是单线程串行消费，这也是队列的特性。
+         * 这时可以通过设置并发消费提高消费的速率，从而减少消息堆积。有两个关键属性 concurrentConsumers 和 prefetchCount。
+         */
+
+        // 设置对每个 listener 在初始化时设置的并发消费者的个数。
+        messagelistener.setConcurrentConsumers(5);
+        // 设置每次一次性从 broker 里面取的待消费的消息的个数。
+        messagelistener.setPrefetchCount(10);
+
+
         // 设置消费者标签
         messagelistener.setConsumerTagStrategy(new ConsumerTagStrategy() {
             @Override
@@ -145,7 +168,8 @@ public class SpringAMQPConsumerConfig {
             public void onMessage(Message message, Channel channel) throws Exception{
                 System.out.println("死信 == "+new String(message.getBody(),"utf-8"));
                 System.out.println("死信 == "+message.getMessageProperties());
-                // 测试死信队列，必须手动设置为死信
+
+                // 测试死信队列，必须手动设置为死信，并设置为重新入列发送
                 channel.basicNack(message.getMessageProperties().getDeliveryTag(),false,false);
             }
         });
